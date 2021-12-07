@@ -19,15 +19,15 @@
 #include <thread>
 #include <vector>
 
+#include "error.h"
+
+namespace bench {
+
 namespace beast = boost::beast;                 // from <boost/beast.hpp>
 namespace http = beast::http;                   // from <boost/beast/http.hpp>
 namespace websocket = beast::websocket;         // from <boost/beast/websocket.hpp>
 namespace net = boost::asio;                    // from <boost/asio.hpp>
 using tcp = boost::asio::ip::tcp;               // from <boost/asio/ip/tcp.hpp>
-
-void fail(beast::error_code ec, char const* what) {
-    std::cerr << what << ": " << ec.message() << "\n";
-}
 
 class WebsocketSession : public std::enable_shared_from_this<WebsocketSession> {
     websocket::stream<beast::tcp_stream> ws_;
@@ -63,33 +63,31 @@ void handle_request(
 
 class HttpSession : public std::enable_shared_from_this<HttpSession> {
 public:
-    class queue {
+    class WorkQueue {
         enum {
             // Maximum number of responses we will queue
-            limit = 16
+            kLimit = 8192
         };
 
         // The type-erased, saved work item
-        struct work
-        {
-            virtual ~work() = default;
+        struct Work {
+            virtual ~Work() = default;
             virtual void operator()() = 0;
         };
 
         HttpSession& self_;
-        std::vector<std::unique_ptr<work>> items_;
+        std::vector<std::unique_ptr<Work>> items_;
 
     public:
-        explicit
-            queue(HttpSession& self)
+        explicit WorkQueue(HttpSession& self)
             : self_(self) {
-            static_assert(limit > 0, "queue limit must be positive");
-            items_.reserve(limit);
+            static_assert(kLimit > 0, "queue limit must be positive");
+            items_.reserve(kLimit);
         }
 
         // Returns `true` if we have reached the queue limit
         bool is_full() const {
-            return items_.size() >= limit;
+            return items_.size() >= kLimit;
         }
 
         // Called when a message finishes sending
@@ -107,18 +105,17 @@ public:
         template<bool isRequest, class Body, class Fields>
         void operator()(http::message<isRequest, Body, Fields>&& msg) {
             // This holds a work item
-            struct work_impl : work {
+            struct WorkImpl : Work {
                 HttpSession& self_;
                 http::message<isRequest, Body, Fields> msg_;
 
-                work_impl(
-                    HttpSession& self,
+                WorkImpl(HttpSession& self,
                     http::message<isRequest, Body, Fields>&& msg)
                     : self_(self)
                     , msg_(std::move(msg)) {
                 }
 
-                void operator()() {
+                void operator()() override {
                     http::async_write(
                         self_.stream_,
                         msg_,
@@ -130,8 +127,7 @@ public:
             };
 
             // Allocate and store the work
-            items_.push_back(
-                boost::make_unique<work_impl>(self_, std::move(msg)));
+            items_.push_back(boost::make_unique<WorkImpl>(self_, std::move(msg)));
 
             // If there was no previous work, start this one
             if (items_.size() == 1)
@@ -142,7 +138,7 @@ public:
     beast::tcp_stream stream_;
     beast::flat_buffer buffer_;
     std::shared_ptr<std::string const> doc_root_;
-    queue queue_;
+    WorkQueue queue_;
 
     // The parser is stored in an optional container so we can
     // construct it from scratch it at the beginning of each new message.
@@ -222,6 +218,7 @@ private:
 
     void on_write(bool close, beast::error_code ec, std::size_t bytes_transferred) {
         boost::ignore_unused(bytes_transferred);
+        stream_.expires_after(std::chrono::seconds(30));
 
         if (ec)
             return fail(ec, "write");
@@ -235,6 +232,7 @@ private:
         // Inform the queue that a write completed
         if (queue_.on_write()) {
             // Read another request
+            buffer_.consume(buffer_.size());
             do_read();
         }
     }
@@ -248,9 +246,9 @@ private:
     }
 };
 
-class TcpListener : public std::enable_shared_from_this<TcpListener> {
+class HttpServer : public std::enable_shared_from_this<HttpServer> {
 public:
-    TcpListener(net::io_context& ioc, tcp::endpoint endpoint, std::shared_ptr<std::string const> const& doc_root)
+    HttpServer(net::io_context& ioc, tcp::endpoint endpoint, std::shared_ptr<std::string const> const& doc_root)
         : ioc_(ioc)
         , acceptor_(net::make_strand(ioc))
         , doc_root_(doc_root) {
@@ -293,7 +291,7 @@ public:
         net::dispatch(
             acceptor_.get_executor(),
             beast::bind_front_handler(
-                &TcpListener::do_accept,
+                &HttpServer::do_accept,
                 this->shared_from_this()));
     }
 private:
@@ -302,7 +300,7 @@ private:
         acceptor_.async_accept(
             net::make_strand(ioc_),
             beast::bind_front_handler(
-                &TcpListener::on_accept,
+                &HttpServer::on_accept,
                 shared_from_this()));
     }
 
@@ -324,3 +322,5 @@ private:
     tcp::acceptor acceptor_;
     std::shared_ptr<std::string const> doc_root_;
 };
+
+}
