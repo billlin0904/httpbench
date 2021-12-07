@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "httpstatis.h"
 #include "error.h"
 
 namespace bench {
@@ -23,7 +24,7 @@ class HttpClient : public std::enable_shared_from_this<HttpClient> {
 public:
     explicit HttpClient(net::io_context& ioc)
         : resolver_(net::make_strand(ioc))
-        , stream_(net::make_strand(ioc)) {
+        , stream_(net::make_strand(ioc)) {           
     }
 
     void run(char const* host,
@@ -51,7 +52,7 @@ public:
             return fail(ec, "resolve");
 
         // Set a timeout on the operation
-        stream_.expires_after(std::chrono::seconds(30));
+        stream_.expires_after(std::chrono::seconds(30));        
 
         // Make the connection on the IP address we get from a lookup
         stream_.async_connect(
@@ -63,7 +64,7 @@ public:
 
     void on_connect(beast::error_code ec, tcp::resolver::results_type::endpoint_type endpoint) {
         if (ec)
-            return fail(ec, "connect");
+            return fail(ec, "connect");        
 
         // Set a timeout on the operation
         stream_.expires_after(std::chrono::seconds(30));
@@ -108,6 +109,14 @@ public:
 
         // If we get here then the connection is closed gracefully
 #endif
+
+        if (HttpStatis::get().stop_test()) {
+            stream_.socket().shutdown(tcp::socket::shutdown_both, ec);
+            return;
+        }
+
+        HttpStatis::get().update(res_.payload_size().value());
+
         buffer_.consume(buffer_.size());
         http::async_write(stream_, req_,
             beast::bind_front_handler(

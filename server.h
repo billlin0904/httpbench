@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "error.h"
+#include "win32.h"
 
 namespace bench {
 
@@ -29,7 +30,7 @@ namespace websocket = beast::websocket;         // from <boost/beast/websocket.h
 namespace net = boost::asio;                    // from <boost/asio.hpp>
 using tcp = boost::asio::ip::tcp;               // from <boost/asio/ip/tcp.hpp>
 
-class WebsocketSession : public std::enable_shared_from_this<WebsocketSession> {
+class WebsocketSession final : public std::enable_shared_from_this<WebsocketSession> {
     websocket::stream<beast::tcp_stream> ws_;
 public:
     explicit WebsocketSession(tcp::socket&& socket)
@@ -61,12 +62,12 @@ void handle_request(
     return send(std::move(res));
 }
 
-class HttpSession : public std::enable_shared_from_this<HttpSession> {
+class HttpSession final : public std::enable_shared_from_this<HttpSession> {
 public:
     class WorkQueue {
         enum {
             // Maximum number of responses we will queue
-            kLimit = 8192
+            kLimit = 4096
         };
 
         // The type-erased, saved work item
@@ -105,7 +106,7 @@ public:
         template<bool isRequest, class Body, class Fields>
         void operator()(http::message<isRequest, Body, Fields>&& msg) {
             // This holds a work item
-            struct WorkImpl : Work {
+            struct WorkImpl final : Work {
                 HttpSession& self_;
                 http::message<isRequest, Body, Fields> msg_;
 
@@ -150,7 +151,7 @@ public:
         std::shared_ptr<std::string const> const& doc_root)
         : stream_(std::move(socket))
         , doc_root_(doc_root)
-        , queue_(*this) {
+        , queue_(*this) {        
     }
 
     // Start the session
@@ -246,7 +247,7 @@ private:
     }
 };
 
-class HttpServer : public std::enable_shared_from_this<HttpServer> {
+class HttpServer final : public std::enable_shared_from_this<HttpServer> {
 public:
     HttpServer(net::io_context& ioc, tcp::endpoint endpoint, std::shared_ptr<std::string const> const& doc_root)
         : ioc_(ioc)
@@ -262,18 +263,31 @@ public:
         }
 
         // Allow address reuse
-        acceptor_.set_option(net::socket_base::reuse_address(true), ec);
+        //acceptor_.set_option(net::socket_base::reuse_address(true), ec);
+        //if (ec) {
+        //    fail(ec, "set_option");
+        //    return;
+        //}
+
+        // Set no delay option
+        acceptor_.set_option(tcp::no_delay(true), ec);
         if (ec) {
             fail(ec, "set_option");
             return;
         }
 
+        excluse_address(acceptor_, ec);
+        if (ec) {
+            fail(ec, "set_option");
+            return;
+        }
+                
         // Bind to the server address
         acceptor_.bind(endpoint, ec);
         if (ec) {
             fail(ec, "bind");
             return;
-        }
+        }        
 
         // Start listening for connections
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
