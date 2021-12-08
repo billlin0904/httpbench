@@ -37,6 +37,7 @@ public:
         req_.target(target);
         req_.set(http::field::host, host);
         req_.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+        req_.set(http::field::content_type, "text/plain");
 
         // Look up the domain name
         resolver_.async_resolve(
@@ -67,7 +68,7 @@ public:
             return fail(ec, "connect");        
 
         // Set a timeout on the operation
-        stream_.expires_after(std::chrono::seconds(30));
+        stream_.expires_after(std::chrono::seconds(30));        
 
         // Send the HTTP request to the remote host
         http::async_write(stream_, req_,
