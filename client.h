@@ -35,9 +35,9 @@ public:
         req_.version(version);
         req_.method(http::verb::get);
         req_.target(target);
-        req_.set(http::field::host, host);
+        req_.set(http::field::host, std::string(host) + ":" + std::string(port));
         req_.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
-        req_.set(http::field::content_type, "text/plain");
+        req_.set(http::field::accept, "text/plain");
 
         // Look up the domain name
         resolver_.async_resolve(
